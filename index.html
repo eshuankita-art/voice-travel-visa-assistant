@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Q&A Agent — Travel/Visa Assistant</title>
+<style>
+:root{--bg:#0f172a;--panel:#1e293b;--border:#334155;--text:#f1f5f9;--muted:#94a3b8;--accent:#3b82f6;--danger:#ef4444}
+*{box-sizing:border-box} body{font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(145deg,#0b1220,#111c31);color:var(--text);min-height:100vh;margin:0;padding:36px 18px}
+main{width:100%;max-width:720px;margin:auto} header{text-align:center;margin-bottom:24px}
+h1{font-size:28px;margin:0 0 7px} .subtitle{color:var(--muted);margin:0;font-size:14px}
+.panel{background:rgba(30,41,59,.94);border:1px solid var(--border);border-radius:14px;padding:18px;margin-top:16px;box-shadow:0 8px 30px rgba(0,0,0,.16)}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}
+input{width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:#0f172a;color:#fff;outline:none}
+input:focus{border-color:var(--accent)} .hint{font-size:11px;color:#64748b;line-height:1.5;margin:7px 0 0}
+.actions{text-align:center;padding:12px 0 4px}.mic{width:92px;height:92px;border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:32px;cursor:pointer;transition:.2s}
+.mic:hover{transform:translateY(-2px)} .mic.listening{background:var(--danger);animation:pulse 1.15s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 18px rgba(239,68,68,0)}}
+#status{text-align:center;color:var(--muted);font-size:13px;min-height:20px;margin-top:10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.box{background:#111827;border-radius:10px;padding:14px;min-height:105px}
+.box h3{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#60a5fa;margin:0 0 8px}.box p{font-size:14px;line-height:1.55;margin:0}
+.sources{font-size:11px;color:#94a3b8;margin-top:10px;line-height:1.5}
+footer{text-align:center;color:#64748b;font-size:11px;margin-top:18px}
+@media(max-width:650px){.grid{grid-template-columns:1fr}h1{font-size:23px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>🎙️ Real-Time Voice Q&A Assistant</h1>
+<p class="subtitle">Ask a travel or visa question out loud — retrieve relevant guidance and hear the answer back.</p>
+</header>
+
+<section class="panel">
+<label for="apiKey">Gemini API Key</label>
+<input id="apiKey" type="password" autocomplete="off" placeholder="Paste your API key for this session">
+<p class="hint">The key is read only from this page and is not stored by this app. Never commit an API key to GitHub. For a production deployment, move the API call to a backend/serverless function.</p>
+</section>
+
+<section class="panel">
+<div class="actions">
+<button class="mic" id="micBtn" aria-label="Start voice input">🎤</button>
+<div id="status">Enter your API key, then click the microphone.</div>
+</div>
+<div class="grid">
+<div class="box"><h3>You said</h3><p id="userText">—</p></div>
+<div class="box"><h3>Assistant answered</h3><p id="botText">—</p></div>
+</div>
+<div class="sources" id="sources"></div>
+</section>
+
+<footer>Demo project • Speech Recognition + lightweight retrieval + Gemini + browser Text-to-Speech</footer>
+
+<script>
+const micBtn=document.getElementById("micBtn");
+const statusEl=document.getElementById("status");
+const userTextEl=document.getElementById("userText");
+const botTextEl=document.getElementById("botText");
+const apiKeyInput=document.getElementById("apiKey");
+const sourcesEl=document.getElementById("sources");
+
+const KNOWLEDGE_BASE=[
+ {title:"Japan Tourist Visa — General Checklist",text:"For a Japan tourist visa, applicants commonly need a valid passport, visa application form, photograph, travel itinerary, proof of accommodation, and financial/supporting documents. Requirements can vary by nationality and residence.",keywords:["japan","tourist","visa","documents","checklist"]},
+ {title:"Thailand Travel Information",text:"Thailand entry and visa requirements depend on nationality, purpose and length of stay. Travellers should verify the latest official immigration or embassy requirements before making plans.",keywords:["thailand","entry","visa","tourist","travel"]},
+ {title:"Visa Processing",text:"Visa processing times vary by destination, visa category, applicant profile and season. Processing estimates should be treated as guidance rather than a guarantee.",keywords:["processing","time","days","visa","application"]},
+ {title:"Travel Documents",text:"Common travel documents include a valid passport, visa or electronic travel authorization where required, accommodation details, itinerary and supporting financial or employment documents when applicable.",keywords:["passport","documents","travel","itinerary","hotel","accommodation"]}
+];
+
+function retrieve(query){
+ const q=query.toLowerCase();
+ const scored=KNOWLEDGE_BASE.map(item=>{
+   let score=0;
+   item.keywords.forEach(k=>{if(q.includes(k))score+=2});
+   item.text.toLowerCase().split(/\s+/).forEach(w=>{if(w.length>4 && q.includes(w))score+=.15});
+   return {...item,score};
+ }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,2);
+ return scored;
+}
+
+function speak(text){
+ const u=new SpeechSynthesisUtterance(text);
+ u.lang="en-IN"; u.rate=1; u.pitch=1;
+ window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
+}
+
+async function askGemini(question, context){
+ const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",{
+   method:"POST",
+   headers:{
+     "Content-Type":"application/json",
+     "x-goog-api-key":apiKeyInput.value.trim()
+   },
+   body:JSON.stringify({
+     systemInstruction:{
+       parts:[{text:`You are a concise travel and visa voice assistant. Use the retrieved context when relevant. Do not invent visa rules, fees, eligibility or processing times. If the context is insufficient, clearly say the user should verify current requirements with the relevant official authority. Answer in 2-5 natural spoken sentences.
+
+Retrieved context:
+${context || "No matching local knowledge was found."}`}]
+     },
+     contents:[{
+       role:"user",
+       parts:[{text:question}]
+     }],
+     generationConfig:{
+       temperature:0.2,
+       maxOutputTokens:350
+     }
+   })
+ });
+ if(!response.ok){
+   let detail="";
+   try{const err=await response.json(); detail=err.error?.message||"";}catch(e){}
+   throw new Error("Gemini API error ("+response.status+"): "+(detail||"check your API key and API access."));
+ }
+ const data=await response.json();
+ return data.candidates?.[0]?.content?.parts?.map(p=>p.text||"").join("").trim()
+   || "I could not generate a response.";
+}
+
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+let recognition=null, listening=false;
+if(!SpeechRecognition){
+ statusEl.textContent="Speech recognition is not supported here. Please use Google Chrome.";
+}else{
+ recognition=new SpeechRecognition();
+ recognition.lang="en-IN"; recognition.interimResults=false; recognition.maxAlternatives=1;
+ micBtn.addEventListener("click",()=>{
+   if(!apiKeyInput.value.trim()){statusEl.textContent="Please enter your Gemini API key first.";return;}
+   if(listening){recognition.stop();return}
+   try{recognition.start()}catch(e){}
+ });
+ recognition.onstart=()=>{listening=true;micBtn.classList.add("listening");statusEl.textContent="Listening…";};
+ recognition.onend=()=>{listening=false;micBtn.classList.remove("listening");};
+ recognition.onerror=e=>{statusEl.textContent="Speech error: "+e.error;listening=false;micBtn.classList.remove("listening");};
+ recognition.onresult=async event=>{
+   const transcript=event.results[0][0].transcript;
+   userTextEl.textContent=transcript; botTextEl.textContent="Thinking…"; sourcesEl.textContent="";
+   statusEl.textContent="Retrieving information and generating an answer…";
+   try{
+     const hits=retrieve(transcript);
+     const context=hits.map(h=>`${h.title}: ${h.text}`).join("\n");
+     const answer=await askGemini(transcript,context);
+     botTextEl.textContent=answer; speak(answer);
+     sourcesEl.textContent=hits.length ? "Retrieved context: "+hits.map(h=>h.title).join(" • ") : "No local knowledge matched; verify current requirements with an official source.";
+     statusEl.textContent="Ready — click the microphone to ask another question.";
+   }catch(err){botTextEl.textContent="Unable to get a response.";statusEl.textContent=err.message;}
+ };
+}
+</script>
+</body>
+</html>
